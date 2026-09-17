@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="utf-8">
+    <title>S5 数学笔记问答</title>
+</head>
+<body>
+    <h1>我的数学笔记 Agent</h1>
+
+    <input id="q" placeholder="输入你的问题，比如：奇变偶不变是什么口诀？">
+    <button id="go">提问</button>
+
+    <div id="out" style="white-space: pre-wrap; margin-top: 16px;"></div>
+<script>
+    function askQuestion() {                                          // 定义一个函数（点击时执行）
+        const out = document.getElementById("out");                   // 找到显示区
+        out.textContent = "查询中，请稍等几秒…";                        // 先给反馈
+        const question = document.getElementById("q").value;          // 读出输入框里的字
+
+        fetch("/ask?question=" + encodeURIComponent(question))        // 发请求（问题拼进网址，中文编码）
+            .then(r => r.json())                                      // 等响应回来 → 解析成对象
+            .then(data => {                                           // 等解析好 → 拿 data 做事
+                out.textContent = data.answer;                        // ← 把答案显示出来
+            })
+            .catch(e => { out.textContent = "出错了：" + e; });        // 任何一步出错 → 显示错误
+    }
+
+    document.getElementById("go").addEventListener("click", askQuestion);  // 把函数交给按钮（不带括号）
+</script>
+</body>
+</html>
+
+
+
