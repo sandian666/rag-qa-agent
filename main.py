@@ -18,7 +18,7 @@
 #                                    ↓
 # ⑧  浏览器显示： 你好，这是 S5 的第一个接口。
 
-from fastapi import FastAPI,Response     #← 从 fastapi 这个库里，取出 FastAPI 这个"类"，（库名小写 fastapi；类名大写 FastAPI，别写混）
+from fastapi import FastAPI    #← 从 fastapi 这个库里，取出 FastAPI 这个"类"，（库名小写 fastapi；类名大写 FastAPI，别写混）
 import uvicorn,os                  #← 整个库都要用，所以直接 import 库名
 import base64
 from agent import answer_cached        #← 从我自己的 agent.py 里，把 answer 函数拿进来
@@ -27,21 +27,48 @@ from fastapi.responses import HTMLResponse
 S5_USER = os.environ.get("S5_USER", "demo") #用户名；没配就默认 demo
 S5_PASSWORD = os.environ.get("S5_PASSWORD")  # 口令不给默认值（拿不到就是 None）
 
+# ===== gate v2：引导页 + cookie（2026-09-21 加）=====
+COOKIE_NAME = "s5_ok"        # 口令通过后发给浏览器的"小凭证"的名字
+
+LOGIN_PAGE = """<!DOCTYPE html>
+<html lang="zh">
+<head><meta charset="utf-8"><title>演示口令</title></head>
+<body style="font-family: sans-serif; max-width: 420px; margin: 80px auto; text-align: center;">
+    <h2>S5 数学笔记 Agent · 演示入口</h2>
+    <p>请输入演示口令</p>
+    <form method="get" action="/">
+        <input type="password" name="k" placeholder="演示口令" autofocus
+               style="padding:8px; width: 220px; font-size: 16px;">
+        <button type="submit" style="padding:8px 16px; font-size: 16px;">进入</button>
+    </form>
+</body>
+</html>
+"""
+
 app = FastAPI()   #   造一个 app 对象。（括号不能省；名字就叫 app，后面两处都要用这个名字
 
 # ===== 第 3 件东西：接口函数
 #   注意顺序：装饰器必须在【函数定义的上一行】，紧挨着，中间不能空行、不能有别的东西
 @app.middleware("http")  #注册中间件 = "每个 HTTP 请求先过这一关"
 async def require_password(request, call_next):
-    #拼 demo:口令 → 转成 bytes（base64 处理的是字节）,编码再转回字符串
+    # ① 之前输对过 → 浏览器带着 cookie 来了 → 直接放行
+    if S5_PASSWORD and request.cookies.get(COOKIE_NAME) == S5_PASSWORD:
+        return await call_next(request)
+
+    # ② 网址里带了口令（?k=口令：点开"口令进链接"或用引导页提交）
+    #    → 放行，并顺手发一个 cookie，让页面里的 fetch 之后也认得出他
+    if S5_PASSWORD and request.query_params.get("k") == S5_PASSWORD:
+        response = await call_next(request)
+        response.set_cookie(COOKIE_NAME, S5_PASSWORD, httponly=True)
+        return response
+
+    # ③ 老路：Basic 认证头（浏览器弹框那条）—— 保留兼容，简历口径不废
     expected = "Basic " + base64.b64encode(f"{S5_USER}:{S5_PASSWORD}".encode()).decode()
     if S5_PASSWORD and request.headers.get("authorization") == expected:
         return await call_next(request)
-    return Response(
-        content="需要口令",
-        status_code=401,
-        headers={"WWW-Authenticate": 'Basic realm="S5"'},
-    )
+
+    # ④ 都没有 → 返回"只有口令框"的引导页（不再返回 401 弹框）
+    return HTMLResponse(content=LOGIN_PAGE, status_code=401)
 
 
 @app.get("/hello")    #登记一条路由：告诉 app 这张表 —— "网址 /hello 归下面那个函数管"
