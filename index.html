@@ -12,12 +12,19 @@
 
     <div id="out" style="white-space: pre-wrap; margin-top: 16px;"></div>
 <script>
+    // ===== 新增①：拿到（或新建）本浏览器的会话号 =====
+    let sid = localStorage.getItem("s5_sid");   // 去浏览器的"储物柜"找；没有就是 null
+    if (!sid) {                                 // 第一次来 → 柜子里没有
+        sid = crypto.randomUUID();              // 生成一个随机会话号（36 位，猜不到）
+        localStorage.setItem("s5_sid", sid);    // 存回柜子 → 以后刷新都还是它
+    }
+
     function askQuestion() {                                          // 定义一个函数（点击时执行）
         const out = document.getElementById("out");                   // 找到显示区
         out.textContent = "查询中，请稍等几秒…";                        // 先给反馈
         const question = document.getElementById("q").value;          // 读出输入框里的字
 
-        fetch("/ask?question=" + encodeURIComponent(question))        // 发请求（问题拼进网址，中文编码）
+        fetch("/ask?question=" + encodeURIComponent(question) + "&session_id=" + sid)   // ← 新增②：末尾多拼一段
             .then(r => r.json())                                      // 等响应回来 → 解析成对象
             .then(data => {                                           // 等解析好 → 拿 data 做事
                 out.textContent = data.answer;                        // ← 把答案显示出来

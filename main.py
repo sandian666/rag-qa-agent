@@ -48,9 +48,9 @@ async def require_password(request, call_next):
 async def hello():    # ← 定义当一个请求打到 /hello 时，要执行哪个函数体
     return "你好，这是 S5 的第一个接口。"
 
-@app.get("/ask")
-async def ask(question: str):  #函数签名：接收一个参数，名字叫 question，类型是 str
-    resp = answer_cached(question)
+@app.get("/ask")  #函数签名：接收两个参数，名字叫question和session_id,类型是 str
+async def ask(question: str,session_id:str):
+    resp = answer_cached(session_id,question)
     return {"answer": resp}
 
 

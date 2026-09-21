@@ -15,6 +15,7 @@ with open(COLLECTION_FILE,encoding="utf-8") as f:
 _answer_cache = {}
 max_quota=3
 _call_count={}
+_sessions = {}
 
 # ================= 两个 client（改造 B） =================
 embed_client = OpenAI(api_key=os.environ.get("ZHIPU_API_KEY"),
@@ -146,12 +147,14 @@ tools_map={
 }                           # 4 个工具的说明书
 
 # ================= 核心：answer() =================
-def answer(question):
-    """输入问题(str) → 返回答案(str)。"""
+#输入会话号 + 问题 → 返回答案；同时把这一轮对话存进该会话
+def answer(session_id,question):
+    history=_sessions.get(session_id,[])  # 第一次来 → 拿不到 → 空列表
     messages = [
         {"role": "system", "content": """你是一个严谨的老师，用户询问关于高中数学有关的知识时，
         你要根据文本检索相关内容并标明出处回答，若该知识文本没有请回复没有检索到相关内容。
         用户询问天气、时间或需要计算时，调用相应的工具。"""},
+        *history,
         {"role": "user", "content": question},
     ]
 
@@ -162,9 +165,10 @@ def answer(question):
             tools=tools,
         )
         msg = resp.choices[0].message
-        messages.append(msg)
+        messages.append(msg.to_dict())
 
-        if not msg.tool_calls:                    # 模型不再要工具 → 这就是最终答案
+        if not msg.tool_calls: # 模型不再要工具 → 这就是最终答案
+            _sessions[session_id] =messages[1:]       #存历史
             return msg.content                    # 修③：返回，不打印
 
         for tool_call in msg.tool_calls:          # 修④：下面 4 行必须是【for 里面】的
@@ -178,10 +182,11 @@ def answer(question):
             })
 
 #带缓存的问答：同一个问题问过就不再花钱重算.
-def answer_cached(question):
+def answer_cached(session_id,question):
     Today=datetime.date.today()
-    if question in _answer_cache:
-        return _answer_cache[question]
+    cache_key =(session_id,len(_sessions.get(session_id,[])),question)
+    if cache_key in _answer_cache:
+        return _answer_cache[cache_key]
     else:
         count=_call_count.get(Today,0)
         count+=1
@@ -189,8 +194,8 @@ def answer_cached(question):
         if _call_count[Today] > max_quota:
             result=("今天额度已用完，明天再来吧")
         else:
-            result=answer(question)
-            _answer_cache[question]=result
+            result=answer(session_id, question)
+            _answer_cache[cache_key]=result
     return result
 
 
@@ -198,6 +203,6 @@ def answer_cached(question):
 # ================= 自测（改造 D） =================
 if __name__ == "__main__":
     print("自检：", col_b.name, col_b.count())          # 期望：math_note_V7 59
-    print(answer("奇变偶不变是什么口诀？"))
+    print(answer("t1","奇变偶不变是什么口诀？"))
 
 
