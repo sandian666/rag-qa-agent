@@ -21,15 +21,12 @@
 
     function askQuestion() {                                          // 定义一个函数（点击时执行）
         const out = document.getElementById("out");                   // 找到显示区
-        out.textContent = "查询中，请稍等几秒…";                        // 先给反馈
+        out.textContent = "";                        // 先给反馈
         const question = document.getElementById("q").value;          // 读出输入框里的字
 
-        fetch("/ask?question=" + encodeURIComponent(question) + "&session_id=" + sid)   // ← 新增②：末尾多拼一段
-            .then(r => r.json())                                      // 等响应回来 → 解析成对象
-            .then(data => {                                           // 等解析好 → 拿 data 做事
-                out.textContent = data.answer;                        // ← 把答案显示出来
-            })
-            .catch(e => { out.textContent = "出错了：" + e; });        // 任何一步出错 → 显示错误
+        const es = new EventSource("/ask_stream?question=" + encodeURIComponent(question) + "&session_id=" + sid);
+        es.onmessage = (e) => { out.textContent += e.data; };   // ← 累加，不是赋值
+        es.onerror = () => { es.close(); };   // 收完/出错就断开（不然它会自动重连，答案会重复贴！）
     }
 
     document.getElementById("go").addEventListener("click", askQuestion);  // 把函数交给按钮（不带括号）

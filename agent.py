@@ -80,8 +80,6 @@ def calculate(a, b, op):
         return f"不支持的运算符：{op}"
 
 # ================= tools + tools_map =================
-# TODO 4：从 S4 主程序【原样搬】tools 列表（4 个工具定义）和 tools_map
-#   一字不改，连 description 的中文都不用动
 tools = [
     {
         "type": "function",
@@ -184,7 +182,7 @@ def answer(session_id,question):
 #带缓存的问答：同一个问题问过就不再花钱重算.
 def answer_cached(session_id,question):
     Today=datetime.date.today()
-    cache_key =(session_id,len(_sessions.get(session_id,[])),question)
+    cache_key =(session_id,question)
     if cache_key in _answer_cache:
         return _answer_cache[cache_key]
     else:
@@ -199,6 +197,102 @@ def answer_cached(session_id,question):
     return result
 
 
+def stream_answer(session_id, question):
+    history=_sessions.get(session_id,[])
+    messages = [
+        {"role": "system", "content": """你是一个严谨的老师，用户询问关于高中数学有关的知识时，
+        你要根据文本检索相关内容并标明出处回答，若该知识文本没有请回复没有检索到相关内容。
+        用户询问天气、时间或需要计算时，调用相应的工具。"""},
+        *history,
+        {"role": "user", "content": question},
+    ]
+    Today = datetime.date.today()
+    cache_key = (session_id, question)
+    if cache_key in _answer_cache:
+        yield f"data: {_answer_cache[cache_key]}\n\n"  # 命中缓存 → 一次吐出全文再收工
+        return
+    count = _call_count.get(Today, 0) + 1  # 额度闸
+    if count > max_quota:
+        if cache_key in _answer_cache:            # 额度用完，但这题答过 → 从缓存白送
+            yield f"data: {_answer_cache[cache_key]}\n\n"
+            return
+        yield f"data: 今天额度已用完，明天再来吧\n\n"
+        return
+    _call_count[Today] = count
+    if count > max_quota:
+        yield f"data: 今天额度已用完，明天再来吧\n\n"
+        return
+    while True:
+        tool_buf = {}    # 收集箱：{index: {"id":..., "name":..., "arguments": ""}}
+        #作用：把模型流式返回的工具调用碎片拼接成完整工具调用。
+        text_buf = ""    # 这一轮吐出来的正文（边流边攒，用来存历史）
+        try:
+            print(f"🔎 开始流式：session={session_id} question={question!r}")
+            n_text = 0          # 收到多少片"正文"
+            n_tool = 0          # 收到多少片"工具调用"（正文里的工具碎片不算字）
+            resp = chat_client.chat.completions.create(
+                model=chat_model,
+                messages=messages,
+                tools=tools,
+                stream=True,
+            )
+            for chunk in resp:                    # ← 一片片取
+                d = chunk.choices[0].delta    # 拿第一条候选，delta表示这一片新增了什么
+                if d.tool_calls:  # 如果有工具调用信息，就进入分支
+                    n_tool += 1    # 工具调用碎片＋1
+                    for tc in d.tool_calls:   # 遍历这一批工具调用片段
+                        # 通过 tc.index 找到这个工具调用的“槽位”，setdefault 的作用：有就复位，没有就创造。
+                        slot = tool_buf.setdefault(tc.index, {"id": None,
+                                                              "name": None, "arguments": ""})
+                        # 判空再赋值
+                        if tc.id:      # 如果这段工具调用包含 id，就设置进去
+                            slot["id"] = tc.id
+                        if tc.function and tc.function.name:  # 如果有函数名字段，就保存它
+                            slot["name"] = tc.function.name
+                        if tc.function and tc.function.arguments:  # 如果函数参数片段存在，就拼接到参数字符串里
+                            slot["arguments"] += tc.function.arguments  # 由于流式返回可能分成很多段，所以不能直接覆盖，要累加。
+                piece = d.content         # ← 取出这次增量返回的正文内容。
+                if piece:                 # ← None 就跳过
+                    n_text += 1           # ← 正文片段计数＋1
+                    piece = piece.replace("\n", " ")    # 把正文里的换行先换掉，防止浏览器识别成消息结束
+                    text_buf += piece
+                    yield f"data: {piece}\n\n"   # 直接把这段正文以 SSE 格式发给前端。
+            print(f"🔎 流结束：正文片数={n_text} 工具片数={n_tool}")
+        except Exception as e:
+            # 别再静默断流：把错误原样推到页面上，看得见才好查
+            print("❌ stream_answer 出错：", repr(e))
+            yield f"data: 【流式中断】{type(e).__name__}: {e}\n\n"  #把错误内容发给前端，让页面显示“流式中断”。
+        if not tool_buf:        # 这一轮没有工具调用 = 这就是最终答案 → 存历史、收工
+            if text_buf:
+                messages.append({"role": "assistant", "content": text_buf})
+            _sessions[session_id] = messages[1:]   # 保留会话历史，并去掉系统提示词
+            if text_buf:
+                _answer_cache[cache_key] = text_buf
+            break             # ← 这个 break 在 while 里，合法
+        print(f"🔎 第 1 轮拼好的工具调用 = {tool_buf}")
+        # —— 有工具要调：先把碎片拼成一条完整的 assistant 消息 ——
+        calls = []   # 新建 calls 列表，准备装完整的工具调用对象
+        for idx, slot in sorted(tool_buf.items()):    # 按工具调用的索引排序
+            #把一个完整工具调用加入列表
+            calls.append({
+                "id": slot["id"],
+                "type": "function",
+                "function": {"name": slot["name"], "arguments": slot["arguments"]},
+            })
+            # 表明这是函数类型工具调用
+        messages.append({"role": "assistant", "content": None, "tool_calls": calls})
+
+        # —— 执行工具
+        for call in calls:
+            function_name = call["function"]["name"]
+            arg = json.loads(call["function"]["arguments"])  # ← 拼完了才敢 loads
+            result = tools_map[function_name](**arg)
+            messages.append({
+                "role": "tool",
+                "tool_call_id": call["id"],
+                "content": result,
+            })
+        # 注意：这里【不要 break】→ 回到 while 顶部，再问模型一次，那一轮才吐正文
 
 # ================= 自测（改造 D） =================
 if __name__ == "__main__":

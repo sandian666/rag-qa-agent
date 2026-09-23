@@ -21,8 +21,8 @@
 from fastapi import FastAPI    #← 从 fastapi 这个库里，取出 FastAPI 这个"类"，（库名小写 fastapi；类名大写 FastAPI，别写混）
 import uvicorn,os                  #← 整个库都要用，所以直接 import 库名
 import base64
-from agent import answer_cached        #← 从我自己的 agent.py 里，把 answer 函数拿进来
-from fastapi.responses import HTMLResponse
+from agent import answer_cached,stream_answer        #← 从我自己的 agent.py 里，把 answer 函数拿进来
+from fastapi.responses import HTMLResponse,StreamingResponse
 
 S5_USER = os.environ.get("S5_USER", "demo") #用户名；没配就默认 demo
 S5_PASSWORD = os.environ.get("S5_PASSWORD")  # 口令不给默认值（拿不到就是 None）
@@ -79,6 +79,12 @@ async def hello():    # ← 定义当一个请求打到 /hello 时，要执行�
 async def ask(question: str,session_id:str):
     resp = answer_cached(session_id,question)
     return {"answer": resp}
+
+@app.get("/ask_stream")
+async def ask_stream(question:str,session_id:str):
+    print(f"📥 /ask_stream 收到请求：question={question!r} session={session_id!r}")
+    return StreamingResponse(stream_answer(session_id,question),
+      media_type="text/event-stream",)   # 告诉浏览器“我在推SSE”
 
 
 @app.get("/",response_class=HTMLResponse)
